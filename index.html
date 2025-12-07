@@ -2,10 +2,13 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <title>Teste React</title>
+  <title>Gestão Financeira Motorista</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
+  <!-- Tailwind CSS via CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React e ReactDOM via CDN -->
   <script src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -15,16 +18,39 @@
 
   <script type="text/babel">
     function App() {
-      return (
-        <div className="min-h-screen flex items-center justify-center">
-          <h1 className="text-2xl font-bold text-blue-600">
-            App do Motorista – teste React
-          </h1>
-        </div>
-      );
-    }
+      const [activeTab, setActiveTab] = React.useState('dashboard');
+      const [rides, setRides] = React.useState([]);
+      const [expenses, setExpenses] = React.useState([]);
+      const [houseExpenses, setHouseExpenses] = React.useState([]);
 
-    ReactDOM.render(<App />, document.getElementById('root'));
-  </script>
-</body>
-</html>
+      const [showRideModal, setShowRideModal] = React.useState(false);
+      const [showExpenseModal, setShowExpenseModal] = React.useState(false);
+      const [showHouseModal, setShowHouseModal] = React.useState(false);
+
+      const today = new Date().toISOString().split('T')[0];
+
+      const [rideForm, setRideForm] = React.useState({
+        date: today,
+        app: 'Uber',
+        value: '',
+        distance: '',
+        time: ''
+      });
+
+      const [expenseForm, setExpenseForm] = React.useState({
+        date: today,
+        category: 'Combustível',
+        description: '',
+        value: ''
+      });
+
+      const [houseForm, setHouseForm] = React.useState({
+        date: today,
+        category: 'Alimentação',
+        description: '',
+        value: ''
+      });
+
+      const addRide = () => {
+        if (!rideForm.value) return;
+        setRides(prev => [
