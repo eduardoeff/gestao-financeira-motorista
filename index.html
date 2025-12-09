@@ -4,10 +4,9 @@
   <meta charset="UTF-8" />
   <title>Gestão Financeira Inteligente</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- Tailwind CSS via CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Chart.js para gráficos -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body class="bg-gray-100">
   <div id="root" class="min-h-screen flex items-center justify-center">
@@ -16,21 +15,17 @@
     </div>
   </div>
 
-  <!-- Firebase SDK (versão compat) -->
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
 
-  <!-- React, ReactDOM e Babel -->
   <script src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <!-- Código da aplicação -->
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    // Configuração Firebase
     const firebaseConfig = {
       apiKey: "AIzaSyBjvoL-4ea23mDnuH6Cq65yXtWkKvj9EEU",
       authDomain: "gestao-motorista-4155f.firebaseapp.com",
@@ -40,7 +35,6 @@
       appId: "1:566057933394:web:afafa56f71557758b11d8b"
     };
 
-    // Inicializa Firebase (compat)
     if (!firebase.apps.length) {
       firebase.initializeApp(firebaseConfig);
     }
@@ -57,22 +51,25 @@
       const [authError, setAuthError] = useState('');
 
       const [activeTab, setActiveTab] = useState('dashboard');
-      const [rides, setRides] = useState([]);
+      const [dailyEarnings, setDailyEarnings] = useState([]);
       const [expenses, setExpenses] = useState([]);
       const [houseExpenses, setHouseExpenses] = useState([]);
 
-      const [showRideModal, setShowRideModal] = useState(false);
+      const [showEarningModal, setShowEarningModal] = useState(false);
       const [showExpenseModal, setShowExpenseModal] = useState(false);
       const [showHouseModal, setShowHouseModal] = useState(false);
 
+      const [filterPeriod, setFilterPeriod] = useState('month'); // week, month, year, all
+
       const chartRef = useRef(null);
       const chartInstance = useRef(null);
+      const barChartRef = useRef(null);
+      const barChartInstance = useRef(null);
 
       const today = new Date().toISOString().split('T')[0];
 
-      const [rideForm, setRideForm] = useState({
+      const [earningForm, setEarningForm] = useState({
         date: today,
-        app: 'Uber',
         value: ''
       });
 
@@ -90,7 +87,6 @@
         value: ''
       });
 
-      // Monitorar autenticação
       useEffect(() => {
         const unsubscribe = auth.onAuthStateChanged((currentUser) => {
           setUser(currentUser);
@@ -99,22 +95,21 @@
         return () => unsubscribe();
       }, []);
 
-      // Carregar dados do Firestore em tempo real
       useEffect(() => {
         if (!user) return;
 
-        const ridesQuery = db
-          .collection('rides')
+        const earningsQuery = db
+          .collection('dailyEarnings')
           .where('userId', '==', user.uid)
           .orderBy('date', 'desc');
 
-        const unsubRides = ridesQuery.onSnapshot((snapshot) => {
+        const unsubEarnings = earningsQuery.onSnapshot((snapshot) => {
           const data = snapshot.docs.map(doc => ({
             id: doc.id,
             ...doc.data(),
             value: parseFloat(doc.data().value) || 0
           }));
-          setRides(data);
+          setDailyEarnings(data);
         });
 
         const expensesQuery = db
@@ -146,7 +141,7 @@
         });
 
         return () => {
-          unsubRides();
+          unsubEarnings();
           unsubExpenses();
           unsubHouse();
         };
@@ -180,16 +175,29 @@
         await auth.signOut();
       };
 
-      const addRide = async () => {
-        if (!rideForm.value || !user) return;
-        await db.collection('rides').add({
-          ...rideForm,
-          value: parseFloat(rideForm.value) || 0,
-          userId: user.uid,
-          createdAt: new Date().toISOString()
-        });
-        setRideForm({ date: today, app: 'Uber', value: '' });
-        setShowRideModal(false);
+      const addEarning = async () => {
+        if (!earningForm.value || !user) return;
+        
+        // Verificar se já existe ganho para essa data
+        const existing = dailyEarnings.find(e => e.date === earningForm.date);
+        
+        if (existing) {
+          // Atualizar o valor existente
+          await db.collection('dailyEarnings').doc(existing.id).update({
+            value: parseFloat(earningForm.value) || 0
+          });
+        } else {
+          // Criar novo
+          await db.collection('dailyEarnings').add({
+            ...earningForm,
+            value: parseFloat(earningForm.value) || 0,
+            userId: user.uid,
+            createdAt: new Date().toISOString()
+          });
+        }
+        
+        setEarningForm({ date: today, value: '' });
+        setShowEarningModal(false);
       };
 
       const addExpense = async () => {
@@ -216,8 +224,8 @@
         setShowHouseModal(false);
       };
 
-      const deleteRide = async (id) => {
-        await db.collection('rides').doc(id).delete();
+      const deleteEarning = async (id) => {
+        await db.collection('dailyEarnings').doc(id).delete();
       };
 
       const deleteExpense = async (id) => {
@@ -228,22 +236,70 @@
         await db.collection('houseExpenses').doc(id).delete();
       };
 
+      // Filtrar dados por período
+      const getFilteredData = (data) => {
+        const now = new Date();
+        return data.filter(item => {
+          const itemDate = new Date(item.date);
+          if (filterPeriod === 'week') {
+            const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            return itemDate >= weekAgo;
+          } else if (filterPeriod === 'month') {
+            return itemDate.getMonth() === now.getMonth() && itemDate.getFullYear() === now.getFullYear();
+          } else if (filterPeriod === 'year') {
+            return itemDate.getFullYear() === now.getFullYear();
+          }
+          return true; // all
+        });
+      };
+
+      const filteredEarnings = getFilteredData(dailyEarnings);
+      const filteredExpenses = getFilteredData(expenses);
+      const filteredHouseExpenses = getFilteredData(houseExpenses);
+
       const safeSum = (arr) =>
         arr.reduce((sum, item) => sum + (isNaN(item.value) ? 0 : item.value), 0);
 
-      const totalRides = safeSum(rides);
-      const totalExpenses = safeSum(expenses);
-      const totalHouseExpenses = safeSum(houseExpenses);
-      const workProfit = totalRides - totalExpenses;
+      const totalEarnings = safeSum(filteredEarnings);
+      const totalExpenses = safeSum(filteredExpenses);
+      const totalHouseExpenses = safeSum(filteredHouseExpenses);
+      const workProfit = totalEarnings - totalExpenses;
       const finalBalance = workProfit - totalHouseExpenses;
 
-      // Novos indicadores de gestão
-      const totalCorridas = rides.length;
-      const ticketMedio = totalCorridas > 0 ? totalRides / totalCorridas : 0;
-      const custoPorCorrida = totalCorridas > 0 ? totalExpenses / totalCorridas : 0;
-      const margemLucro = totalRides > 0 ? (workProfit / totalRides) * 100 : 0;
+      const totalDays = filteredEarnings.length;
+      const ticketMedio = totalDays > 0 ? totalEarnings / totalDays : 0;
+      const custoPorDia = totalDays > 0 ? totalExpenses / totalDays : 0;
+      const margemLucro = totalEarnings > 0 ? (workProfit / totalEarnings) * 100 : 0;
 
-      // Preparar dados para o gráfico (últimos 7 dias)
+      // Comparação mês atual vs anterior
+      const getCurrentMonthData = (data) => {
+        const now = new Date();
+        return data.filter(item => {
+          const d = new Date(item.date);
+          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        });
+      };
+
+      const getLastMonthData = (data) => {
+        const now = new Date();
+        const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return data.filter(item => {
+          const d = new Date(item.date);
+          return d.getMonth() === lastMonth.getMonth() && d.getFullYear() === lastMonth.getFullYear();
+        });
+      };
+
+      const currentMonthEarnings = safeSum(getCurrentMonthData(dailyEarnings));
+      const lastMonthEarnings = safeSum(getLastMonthData(dailyEarnings));
+      const earningsDiff = currentMonthEarnings - lastMonthEarnings;
+      const earningsDiffPercent = lastMonthEarnings > 0 ? (earningsDiff / lastMonthEarnings) * 100 : 0;
+
+      const currentMonthProfit = safeSum(getCurrentMonthData(dailyEarnings)) - safeSum(getCurrentMonthData(expenses));
+      const lastMonthProfit = safeSum(getLastMonthData(dailyEarnings)) - safeSum(getLastMonthData(expenses));
+      const profitDiff = currentMonthProfit - lastMonthProfit;
+      const profitDiffPercent = lastMonthProfit > 0 ? (profitDiff / lastMonthProfit) * 100 : 0;
+
+      // Gráfico de evolução (últimos 7 dias)
       const getLast7Days = () => {
         const days = [];
         for (let i = 6; i >= 0; i--) {
@@ -257,15 +313,15 @@
       const last7Days = getLast7Days();
 
       const chartData = last7Days.map(date => {
-        const dayRides = rides.filter(r => r.date === date);
+        const dayEarnings = dailyEarnings.filter(r => r.date === date);
         const dayExpenses = expenses.filter(e => e.date === date);
-        const receita = safeSum(dayRides);
+        const receita = safeSum(dayEarnings);
         const despesa = safeSum(dayExpenses);
         const lucro = receita - despesa;
         return { date, receita, despesa, lucro };
       });
 
-      // Projeções baseadas nos últimos 7 dias
+      // Projeções
       const avgReceitaDiaria = chartData.reduce((sum, d) => sum + d.receita, 0) / 7;
       const avgDespesaDiaria = chartData.reduce((sum, d) => sum + d.despesa, 0) / 7;
       const avgLucroDiario = avgReceitaDiaria - avgDespesaDiaria;
@@ -277,10 +333,10 @@
       };
 
       const diasRestantes = diasRestantesMes();
-      const projecaoReceita = totalRides + (avgReceitaDiaria * diasRestantes);
-      const projecaoLucro = workProfit + (avgLucroDiario * diasRestantes);
+      const projecaoReceita = currentMonthEarnings + (avgReceitaDiaria * diasRestantes);
+      const projecaoLucro = currentMonthProfit + (avgLucroDiario * diasRestantes);
 
-      // Renderizar gráfico
+      // Renderizar gráfico de linha
       useEffect(() => {
         if (activeTab === 'dashboard' && chartRef.current && chartData.length > 0) {
           if (chartInstance.current) {
@@ -355,6 +411,113 @@
           }
         };
       }, [activeTab, chartData]);
+
+      // Renderizar gráfico de barras (indicadores + projeção)
+      useEffect(() => {
+        if (activeTab === 'dashboard' && barChartRef.current) {
+          if (barChartInstance.current) {
+            barChartInstance.current.destroy();
+          }
+
+          const ctx = barChartRef.current.getContext('2d');
+          barChartInstance.current = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: ['Ticket Médio', 'Custo/Dia', 'Projeção Receita', 'Projeção Lucro'],
+              datasets: [{
+                label: 'Valores (R$)',
+                data: [ticketMedio, custoPorDia, projecaoReceita, projecaoLucro],
+                backgroundColor: [
+                  'rgba(16, 185, 129, 0.7)',
+                  'rgba(245, 158, 11, 0.7)',
+                  'rgba(139, 92, 246, 0.7)',
+                  'rgba(14, 165, 233, 0.7)'
+                ],
+                borderColor: [
+                  '#10b981',
+                  '#f59e0b',
+                  '#8b5cf6',
+                  '#0ea5e9'
+                ],
+                borderWidth: 2
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  display: false
+                }
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  ticks: {
+                    callback: function(value) {
+                      return 'R$ ' + value.toFixed(0);
+                    }
+                  }
+                }
+              }
+            }
+          });
+        }
+
+        return () => {
+          if (barChartInstance.current) {
+            barChartInstance.current.destroy();
+          }
+        };
+      }, [activeTab, ticketMedio, custoPorDia, projecaoReceita, projecaoLucro]);
+
+      // Exportar PDF
+      const exportPDF = () => {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+
+        doc.setFontSize(18);
+        doc.text('Relatório Financeiro', 20, 20);
+        
+        doc.setFontSize(12);
+        doc.text(`Período: ${filterPeriod === 'week' ? 'Última Semana' : filterPeriod === 'month' ? 'Mês Atual' : filterPeriod === 'year' ? 'Ano Atual' : 'Todos'}`, 20, 30);
+        doc.text(`Data: ${new Date().toLocaleDateString('pt-BR')}`, 20, 37);
+
+        doc.setFontSize(14);
+        doc.text('Resumo Financeiro', 20, 50);
+        
+        doc.setFontSize(11);
+        doc.text(`Receita Total: R$ ${totalEarnings.toFixed(2)}`, 20, 60);
+        doc.text(`Despesas Trabalho: R$ ${totalExpenses.toFixed(2)}`, 20, 67);
+        doc.text(`Lucro Trabalho: R$ ${workProfit.toFixed(2)}`, 20, 74);
+        doc.text(`Despesas Casa: R$ ${totalHouseExpenses.toFixed(2)}`, 20, 81);
+        doc.text(`Saldo Final: R$ ${finalBalance.toFixed(2)}`, 20, 88);
+
+        doc.setFontSize(14);
+        doc.text('Indicadores', 20, 105);
+        
+        doc.setFontSize(11);
+        doc.text(`Ticket Médio: R$ ${ticketMedio.toFixed(2)}`, 20, 115);
+        doc.text(`Custo por Dia: R$ ${custoPorDia.toFixed(2)}`, 20, 122);
+        doc.text(`Margem de Lucro: ${margemLucro.toFixed(1)}%`, 20, 129);
+
+        doc.setFontSize(14);
+        doc.text('Projeções do Mês', 20, 145);
+        
+        doc.setFontSize(11);
+        doc.text(`Receita Projetada: R$ ${projecaoReceita.toFixed(2)}`, 20, 155);
+        doc.text(`Lucro Projetado: R$ ${projecaoLucro.toFixed(2)}`, 20, 162);
+
+        doc.setFontSize(14);
+        doc.text('Comparação Mensal', 20, 178);
+        
+        doc.setFontSize(11);
+        doc.text(`Receita Mês Atual: R$ ${currentMonthEarnings.toFixed(2)}`, 20, 188);
+        doc.text(`Receita Mês Anterior: R$ ${lastMonthEarnings.toFixed(2)}`, 20, 195);
+        doc.text(`Variação: ${earningsDiffPercent >= 0 ? '+' : ''}${earningsDiffPercent.toFixed(1)}%`, 20, 202);
+
+        doc.save('relatorio-financeiro.pdf');
+      };
 
       if (loading) {
         return (
@@ -448,7 +611,7 @@
                 </form>
 
                 <p className="text-[11px] text-slate-400 text-center mt-4">
-                  Seus dados de corridas e despesas ficam salvos na nuvem, por usuário.
+                  Seus dados financeiros ficam salvos na nuvem com segurança.
                 </p>
               </div>
             </div>
@@ -463,7 +626,7 @@
           <header className="bg-gradient-to-r from-slate-900 via-slate-800 to-sky-700 text-white p-4 shadow-lg">
             <div className="flex justify-between items-center max-w-xl mx-auto">
               <div>
-                <h1 className="text-xl font-bold">💰 Gestão Financeira Inteligente</h1>
+                <h1 className="text-xl font-bold">💰 Gestão Financeira</h1>
                 <p className="text-xs text-slate-200">{user.email}</p>
               </div>
               <button
@@ -484,11 +647,11 @@
               <span>Dashboard</span>
             </button>
             <button
-              onClick={() => setActiveTab('corridas')}
-              className={`flex flex-col items-center px-3 py-1 ${activeTab === 'corridas' ? 'text-sky-600 font-semibold' : 'text-gray-500'}`}
+              onClick={() => setActiveTab('ganhos')}
+              className={`flex flex-col items-center px-3 py-1 ${activeTab === 'ganhos' ? 'text-sky-600 font-semibold' : 'text-gray-500'}`}
             >
-              <span className="text-lg">🚗</span>
-              <span>Corridas</span>
+              <span className="text-lg">💵</span>
+              <span>Ganhos</span>
             </button>
             <button
               onClick={() => setActiveTab('despesas-trabalho')}
@@ -509,12 +672,88 @@
           <main className="flex-1 p-3 pb-20 max-w-xl mx-auto w-full">
             {activeTab === 'dashboard' && (
               <div>
+                {/* Filtro de período + Exportar PDF */}
+                <div className="bg-white rounded-xl shadow-lg p-3 mb-4">
+                  <div className="flex gap-2 mb-2">
+                    <button
+                      onClick={() => setFilterPeriod('week')}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition ${filterPeriod === 'week' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700'}`}
+                    >
+                      Semana
+                    </button>
+                    <button
+                      onClick={() => setFilterPeriod('month')}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition ${filterPeriod === 'month' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700'}`}
+                    >
+                      Mês
+                    </button>
+                    <button
+                      onClick={() => setFilterPeriod('year')}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition ${filterPeriod === 'year' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700'}`}
+                    >
+                      Ano
+                    </button>
+                    <button
+                      onClick={() => setFilterPeriod('all')}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition ${filterPeriod === 'all' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700'}`}
+                    >
+                      Tudo
+                    </button>
+                  </div>
+                  <button
+                    onClick={exportPDF}
+                    className="w-full bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-sm font-semibold transition flex items-center justify-center gap-2"
+                  >
+                    📄 Exportar PDF
+                  </button>
+                </div>
+
+                {/* Comparação mês a mês */}
+                <div className="bg-gradient-to-br from-indigo-600 to-indigo-700 text-white rounded-xl p-4 mb-4 shadow-lg">
+                  <h3 className="text-sm font-bold mb-3 flex items-center">
+                    <span className="mr-2">📅</span>
+                    Comparação Mensal
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <div className="opacity-80">Receita Mês Atual</div>
+                      <div className="text-lg font-bold">R$ {currentMonthEarnings.toFixed(2)}</div>
+                    </div>
+                    <div>
+                      <div className="opacity-80">Receita Mês Anterior</div>
+                      <div className="text-lg font-bold">R$ {lastMonthEarnings.toFixed(2)}</div>
+                    </div>
+                    <div>
+                      <div className="opacity-80">Lucro Mês Atual</div>
+                      <div className="text-lg font-bold">R$ {currentMonthProfit.toFixed(2)}</div>
+                    </div>
+                    <div>
+                      <div className="opacity-80">Lucro Mês Anterior</div>
+                      <div className="text-lg font-bold">R$ {lastMonthProfit.toFixed(2)}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-white/20">
+                    <div className="flex justify-between text-xs">
+                      <span>Variação Receita:</span>
+                      <span className={`font-bold ${earningsDiff >= 0 ? 'text-green-200' : 'text-red-200'}`}>
+                        {earningsDiff >= 0 ? '+' : ''}{earningsDiffPercent.toFixed(1)}% (R$ {earningsDiff.toFixed(2)})
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-xs mt-1">
+                      <span>Variação Lucro:</span>
+                      <span className={`font-bold ${profitDiff >= 0 ? 'text-green-200' : 'text-red-200'}`}>
+                        {profitDiff >= 0 ? '+' : ''}{profitDiffPercent.toFixed(1)}% (R$ {profitDiff.toFixed(2)})
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Cards principais */}
                 <div className="grid grid-cols-2 gap-3 mb-4">
                   <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-xl p-4 shadow-lg">
-                    <div className="text-xs opacity-90 font-medium">Receita Corridas</div>
-                    <div className="text-2xl font-bold mt-1">R$ {totalRides.toFixed(2)}</div>
-                    <div className="text-xs opacity-75 mt-1">{totalCorridas} corridas</div>
+                    <div className="text-xs opacity-90 font-medium">Receita</div>
+                    <div className="text-2xl font-bold mt-1">R$ {totalEarnings.toFixed(2)}</div>
+                    <div className="text-xs opacity-75 mt-1">{totalDays} dias</div>
                   </div>
                   <div className="bg-gradient-to-br from-amber-500 to-amber-600 text-white rounded-xl p-4 shadow-lg">
                     <div className="text-xs opacity-90 font-medium">Despesas Trabalho</div>
@@ -568,23 +807,34 @@
                   </div>
                 </div>
 
-                {/* Indicadores de eficiência */}
+                {/* Gráfico de barras - Indicadores + Projeção */}
                 <div className="bg-white rounded-xl shadow-lg p-4 mb-4">
                   <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center">
                     <span className="mr-2">📊</span>
+                    Indicadores & Projeções
+                  </h3>
+                  <div style={{ height: '220px' }}>
+                    <canvas ref={barChartRef}></canvas>
+                  </div>
+                </div>
+
+                {/* Indicadores de eficiência */}
+                <div className="bg-white rounded-xl shadow-lg p-4 mb-4">
+                  <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center">
+                    <span className="mr-2">🎯</span>
                     Indicadores de Eficiência
                   </h3>
                   <div className="grid grid-cols-3 gap-3">
                     <div className="bg-slate-50 rounded-lg p-3 text-center">
-                      <div className="text-xs text-slate-500 mb-1">Ticket Médio</div>
+                      <div className="text-xs text-slate-500 mb-1">Ganho/Dia</div>
                       <div className="text-lg font-bold text-emerald-600">
                         R$ {ticketMedio.toFixed(2)}
                       </div>
                     </div>
                     <div className="bg-slate-50 rounded-lg p-3 text-center">
-                      <div className="text-xs text-slate-500 mb-1">Custo/Corrida</div>
+                      <div className="text-xs text-slate-500 mb-1">Custo/Dia</div>
                       <div className="text-lg font-bold text-amber-600">
-                        R$ {custoPorCorrida.toFixed(2)}
+                        R$ {custoPorDia.toFixed(2)}
                       </div>
                     </div>
                     <div className="bg-slate-50 rounded-lg p-3 text-center">
@@ -603,27 +853,27 @@
                     Atividade Recente
                   </h2>
                   <div className="space-y-2 text-sm">
-                    {[...rides.slice(0, 3).map(r => ({...r, type: 'ride'})),
-                      ...expenses.slice(0, 3).map(e => ({...e, type: 'expense'})),
-                      ...houseExpenses.slice(0, 3).map(h => ({...h, type: 'house'}))]
+                    {[...filteredEarnings.slice(0, 3).map(r => ({...r, type: 'earning'})),
+                      ...filteredExpenses.slice(0, 3).map(e => ({...e, type: 'expense'})),
+                      ...filteredHouseExpenses.slice(0, 3).map(h => ({...h, type: 'house'}))]
                       .sort((a, b) => new Date(b.date) - new Date(a.date))
                       .slice(0, 5)
                       .map((item, idx) => (
                         <div key={idx} className="flex justify-between items-center bg-slate-50 rounded-lg px-3 py-2.5">
                           <div>
                             <span className="font-semibold text-slate-700">
-                              {item.type === 'ride' && '🚗 Corrida'}
+                              {item.type === 'earning' && '💵 Ganho'}
                               {item.type === 'expense' && '⛽ Trabalho'}
                               {item.type === 'house' && '🏠 Casa'}
                             </span>
                             <span className="text-slate-400 text-xs ml-2">{item.date}</span>
                           </div>
-                          <span className={`font-bold ${item.type === 'ride' ? 'text-emerald-600' : 'text-red-600'}`}>
-                            {item.type === 'ride' ? '+' : '-'} R$ {item.value.toFixed(2)}
+                          <span className={`font-bold ${item.type === 'earning' ? 'text-emerald-600' : 'text-red-600'}`}>
+                            {item.type === 'earning' ? '+' : '-'} R$ {item.value.toFixed(2)}
                           </span>
                         </div>
                       ))}
-                    {rides.length === 0 && expenses.length === 0 && houseExpenses.length === 0 && (
+                    {filteredEarnings.length === 0 && filteredExpenses.length === 0 && filteredHouseExpenses.length === 0 && (
                       <p className="text-center text-slate-400 py-6 text-xs">
                         Nenhuma atividade registrada ainda
                       </p>
@@ -633,34 +883,34 @@
               </div>
             )}
 
-            {activeTab === 'corridas' && (
+            {activeTab === 'ganhos' && (
               <div>
                 <div className="flex justify-between items-center mb-3">
-                  <h2 className="text-lg font-bold text-slate-700">🚗 Corridas</h2>
+                  <h2 className="text-lg font-bold text-slate-700">💵 Ganhos Diários</h2>
                   <button
-                    onClick={() => setShowRideModal(true)}
-                    className="bg-sky-600 hover:bg-sky-700 text-white text-sm px-4 py-2 rounded-lg shadow transition"
+                    onClick={() => setShowEarningModal(true)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-4 py-2 rounded-lg shadow transition"
                   >
-                    + Corrida
+                    + Ganho
                   </button>
                 </div>
 
-                {rides.length === 0 && (
+                {filteredEarnings.length === 0 && (
                   <p className="text-center text-slate-400 text-sm mt-6">
-                    Nenhuma corrida registrada
+                    Nenhum ganho registrado
                   </p>
                 )}
 
-                {rides.map(ride => (
-                  <div key={ride.id} className={mobileCardClass}>
+                {filteredEarnings.map(earning => (
+                  <div key={earning.id} className={mobileCardClass}>
                     <div className="flex justify-between items-center mb-1">
-                      <span className="font-semibold text-slate-700">{ride.app}</span>
-                      <span className="text-xs text-slate-400">{ride.date}</span>
+                      <span className="font-semibold text-slate-700">Ganho do dia</span>
+                      <span className="text-xs text-slate-400">{earning.date}</span>
                     </div>
                     <div className="flex justify-between items-center mt-2">
-                      <span className="font-bold text-emerald-600 text-lg">R$ {ride.value.toFixed(2)}</span>
+                      <span className="font-bold text-emerald-600 text-lg">R$ {earning.value.toFixed(2)}</span>
                       <button
-                        onClick={() => deleteRide(ride.id)}
+                        onClick={() => deleteEarning(earning.id)}
                         className="text-xs text-red-600 hover:text-red-700 font-medium"
                       >
                         Excluir
@@ -683,13 +933,13 @@
                   </button>
                 </div>
 
-                {expenses.length === 0 && (
+                {filteredExpenses.length === 0 && (
                   <p className="text-center text-slate-400 text-sm mt-6">
                     Nenhuma despesa registrada
                   </p>
                 )}
 
-                {expenses.map(expense => (
+                {filteredExpenses.map(expense => (
                   <div key={expense.id} className={mobileCardClass}>
                     <div className="flex justify-between items-center mb-1">
                       <span className="font-semibold text-slate-700">{expense.category}</span>
@@ -726,13 +976,13 @@
                   </button>
                 </div>
 
-                {houseExpenses.length === 0 && (
+                {filteredHouseExpenses.length === 0 && (
                   <p className="text-center text-slate-400 text-sm mt-6">
                     Nenhuma despesa registrada
                   </p>
                 )}
 
-                {houseExpenses.map(house => (
+                {filteredHouseExpenses.map(house => (
                   <div key={house.id} className={mobileCardClass}>
                     <div className="flex justify-between items-center mb-1">
                       <span className="font-semibold text-slate-700">{house.category}</span>
@@ -758,56 +1008,46 @@
             )}
           </main>
 
-          {/* Modal: Nova Corrida */}
-          {showRideModal && (
+          {/* Modal: Novo Ganho */}
+          {showEarningModal && (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-30">
               <div className="bg-white rounded-xl p-5 w-full max-w-sm shadow-2xl">
-                <h3 className="text-lg font-bold mb-4 text-slate-700">🚗 Nova Corrida</h3>
+                <h3 className="text-lg font-bold mb-4 text-slate-700">💵 Ganho do Dia</h3>
                 <div className="space-y-3 text-sm">
                   <div>
                     <label className="block mb-1 font-medium text-slate-600">Data</label>
                     <input
                       type="date"
-                      value={rideForm.date}
-                      onChange={e => setRideForm({...rideForm, date: e.target.value})}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+                      value={earningForm.date}
+                      onChange={e => setEarningForm({...earningForm, date: e.target.value})}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                     />
                   </div>
                   <div>
-                    <label className="block mb-1 font-medium text-slate-600">Aplicativo</label>
-                    <select
-                      value={rideForm.app}
-                      onChange={e => setRideForm({...rideForm, app: e.target.value})}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
-                    >
-                      <option>Uber</option>
-                      <option>99</option>
-                      <option>InDriver</option>
-                      <option>Outro</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block mb-1 font-medium text-slate-600">Valor (R$)</label>
+                    <label className="block mb-1 font-medium text-slate-600">Valor Total do Dia (R$)</label>
                     <input
                       type="number"
                       step="0.01"
-                      value={rideForm.value}
-                      onChange={e => setRideForm({...rideForm, value: e.target.value})}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+                      value={earningForm.value}
+                      onChange={e => setEarningForm({...earningForm, value: e.target.value})}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                       placeholder="0,00"
                     />
                   </div>
+                  <p className="text-xs text-slate-500">
+                    💡 Se já existe um ganho para esta data, ele será atualizado.
+                  </p>
                 </div>
                 <div className="flex gap-2 mt-5">
                   <button
-                    onClick={() => setShowRideModal(false)}
+                    onClick={() => setShowEarningModal(false)}
                     className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 py-2.5 rounded-lg font-medium transition"
                   >
                     Cancelar
                   </button>
                   <button
-                    onClick={addRide}
-                    className="flex-1 bg-sky-600 hover:bg-sky-700 text-white py-2.5 rounded-lg font-medium transition"
+                    onClick={addEarning}
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-lg font-medium transition"
                   >
                     Salvar
                   </button>
@@ -947,7 +1187,7 @@
                 </div>
                 <div className="flex gap-2 mt-5">
                   <button
-                    onClick={() => setHouseForm(false)}
+                    onClick={() => setShowHouseModal(false)}
                     className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 py-2.5 rounded-lg font-medium transition"
                   >
                     Cancelar
